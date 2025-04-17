@@ -93,8 +93,16 @@ fn spawn_scan(root_path: PathBuf) -> Receiver<ScanMsg> {
             }
         }
         for (dir_path, list) in map.into_iter() {
+            // ルート自身を除外
+            if dir_path == root_path {
+                continue;
+            }
             let name: Arc<str> = Arc::from(dir_path.file_name().unwrap_or_default().to_string_lossy().as_ref());
-            let mut node = Box::new(DirNode::new(name.clone(), dir_path.clone(), list.iter().map(|(_,sz)| *sz).sum()));
+            let mut node = Box::new(DirNode::new(
+                name.clone(),
+                dir_path.clone(),
+                list.iter().map(|(_,sz)| *sz).sum(),
+            ));
             node.children = list.into_iter().map(|(n, sz)| {
                 let child_path = dir_path.join(&*n);
                 Box::new(DirNode::new(n, child_path, sz))
@@ -176,8 +184,8 @@ impl eframe::App for DiskVizApp {
                             let label = format!("{:<10} {:>6.1}%", child.name, pct);
                             let resp = ui.selectable_label(false, label);
 
-                            // 左クリックで深掘り
-                            if resp.clicked() {
+                            // 左クリックで深掘り（ディレクトリのみ）
+                            if resp.clicked() && !child.children.is_empty() {
                                 self.bread.push(&**child as *const DirNode);
                             }
                             // 右クリックでメニュー
