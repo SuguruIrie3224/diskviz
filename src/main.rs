@@ -18,9 +18,11 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use std::process::Command;
 
 use crossbeam_channel::{unbounded, Receiver};
-use eframe::{egui, egui::{Color32, Id}};
+use eframe::{egui, egui::{Color32, Id, Layout, Align}};
+use eframe::egui::TextWrapMode;
 use egui::{ScrollArea, Memory, FontDefinitions, FontFamily, FontData};
 use egui::popup::PopupCloseBehavior;
 use rayon::prelude::*;
@@ -180,58 +182,83 @@ impl eframe::App for DiskVizApp {
         };
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical(|ui| {
-                if let Some(node) = current {
-                    // パンくずバー
-                    if !self.bread.is_empty() {
-                        if ui.button("<- 戻る").clicked() {
-                            self.bread.pop();
-                        }
-                    }
-                    ui.heading(format!("{} ({} items)", node.name, node.children.len()));
+            if let Some(node) = current {
+                if !self.bread.is_empty() && ui.button("<- 戻る").clicked() {
+                    self.bread.pop();
+                }
+                ui.heading(format!("{} ({} items)", node.name, node.children.len()));
 
-                    ScrollArea::vertical().show(ui, |ui| {
-                        for child in &node.children {
-                            let pct = child.size as f64 / node.size as f64 * 100.0;
-                            let label = format!("{:<10} {:>6.1}%", child.name, pct);
-                            let resp = ui.selectable_label(false, label);
-
-                            // 左クリックで深掘り（ディレクトリのみ）
+                // 固定ヘッダー
+                ui.horizontal(|ui| {
+                    let total_width = ui.available_width();
+                    let label_w = total_width * 0.7;
+                    let bar_w = total_width - label_w;
+                    ui.allocate_ui(egui::Vec2::new(label_w, 20.0), |ui| {
+                        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                            ui.label("Name");
+                        });
+                    });
+                    ui.allocate_ui(egui::Vec2::new(bar_w, 20.0), |ui| {
+                        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                            ui.label("Usage");
+                        });
+                    });
+                });
+                // スクロール可能な行
+                ScrollArea::vertical().show(ui, |ui| {
+                    let total_width = ui.available_width();
+                    let label_w = total_width * 0.7;
+                    let bar_w = total_width - label_w;
+                    for child in &node.children {
+                        let pct = child.size as f64 / node.size as f64 * 100.0;
+                        ui.horizontal(|ui| {
+                            // Name cell
+                            let resp = ui.add_sized(
+                                [label_w, 20.0],
+                                egui::SelectableLabel::new(false, &*child.name)
+                            );
                             if resp.clicked() && !child.children.is_empty() {
                                 self.bread.push(&**child as *const DirNode);
                             }
-                            // 右クリックでメニュー
+                            let popup_id = Id::new(format!("menu-{}", child.path.display()));
                             if resp.secondary_clicked() {
-                                let popup_id = Id::new(format!("menu-{}", child.path.display()));
                                 ui.memory_mut(|m: &mut Memory| m.toggle_popup(popup_id));
-                                egui::popup::popup_above_or_below_widget(
-                                    ui,
-                                    popup_id,
-                                    &resp,
-                                    egui::AboveOrBelow::Below,
-                                    PopupCloseBehavior::CloseOnClickOutside,
-                                    |ui| {
-                                        if ui.button("パスのコピー").clicked() {
-                                            ui.output_mut(|o| o.copied_text = child.path.display().to_string());
-                                        }
-                                        if ui.button("Finderで開く").clicked() {
+                            }
+                            egui::popup::popup_above_or_below_widget(
+                                ui,
+                                popup_id,
+                                &resp,
+                                egui::AboveOrBelow::Below,
+                                PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    ui.set_min_width(150.0);
+                                    if ui.button("パスのコピー").clicked() {
+                                        ui.output_mut(|o| o.copied_text = child.path.display().to_string());
+                                        ui.memory_mut(|m: &mut Memory| m.close_popup());
+                                    }
+                                    if ui.button("Finderで表示").clicked() {
+                                        if child.path.is_file() {
+                                            let _ = Command::new("open")
+                                                .arg("-R")
+                                                .arg(&child.path)
+                                                .spawn();
+                                        } else {
                                             let _ = open::that(&child.path);
                                         }
-                                    },
-                                );
-                            }
-                            // バー描画
-                            let bar_width = ui.available_width();
-                            let width = bar_width * pct as f32 / 100.0;
-                            let size = egui::vec2(width, 8.0);
-                            let (_, rect) = ui.allocate_space(size);
-                            ui.painter().rect_filled(rect, 0.0, Color32::LIGHT_BLUE);
-                        }
-                    });
-                } else {
-                    ui.label("No data…");
-                }
-            });
+                                    }
+                                },
+                            );
+                            // Usage cell
+                            ui.add_sized([bar_w, 20.0], egui::ProgressBar::new(pct as f32 / 100.0)
+                                .desired_width(bar_w)
+                                .text(format!("{:.1}%", pct))
+                            );
+                        }); // end horizontal
+                    }
+                });
+            } else {
+                ui.label("No data…");
+            }
         });
 
         ctx.request_repaint_after(Duration::from_millis(16));
