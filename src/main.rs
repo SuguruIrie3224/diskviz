@@ -1,17 +1,3 @@
-// diskviz.rs — Single‑file edition
-// ============================================================
-// Cargo.toml (必須依存)
-// [dependencies]
-// eframe           = "0.27"
-// walkdir          = "2"
-// rayon            = "1"
-// crossbeam-channel = "0.5"
-// rfd              = "0.14"
-// open             = "5"
-// serde            = { version = "1", features = ["derive"] }
-// serde_json       = "1"
-// ============================================================
-
 use std::{
     collections::HashMap,
     path::{PathBuf},
@@ -24,6 +10,7 @@ use crossbeam_channel::{unbounded, Receiver};
 use eframe::{egui, egui::{Color32, Id, Layout, Align}};
 use eframe::egui::TextWrapMode;
 use egui::{ScrollArea, Memory, FontDefinitions, FontFamily, FontData};
+use egui_extras::{TableBuilder, Column};
 use egui::popup::PopupCloseBehavior;
 use rayon::prelude::*;
 use rayon::iter::ParallelBridge;
@@ -187,76 +174,79 @@ impl eframe::App for DiskVizApp {
                     self.bread.pop();
                 }
                 ui.heading(format!("{} ({} items)", node.name, node.children.len()));
-
-                // 固定ヘッダー
-                ui.horizontal(|ui| {
-                    let total_width = ui.available_width();
-                    let label_w = total_width * 0.7;
-                    let bar_w = total_width - label_w;
-                    ui.allocate_ui(egui::Vec2::new(label_w, 20.0), |ui| {
-                        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
-                            ui.label("Name");
-                        });
-                    });
-                    ui.allocate_ui(egui::Vec2::new(bar_w, 20.0), |ui| {
-                        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
-                            ui.label("Usage");
-                        });
-                    });
-                });
-                
-                // スクロール可能な行
+                // Table display: Name, Size (MB), Usage
                 ScrollArea::vertical().show(ui, |ui| {
-                    let total_width = ui.available_width();
-                    let label_w = total_width * 0.7;
-                    let bar_w = total_width - label_w;
-                    for child in &node.children {
-                        let pct = child.size as f64 / node.size as f64 * 100.0;
-                        ui.horizontal(|ui| {
-                            // Name cell
-                            let resp = ui.add_sized(
-                                [label_w, 20.0],
-                                egui::Label::new(&*child.name).wrap_mode(TextWrapMode::Truncate)
-                            );
-                            if resp.clicked() && !child.children.is_empty() {
-                                self.bread.push(&**child as *const DirNode);
-                            }
-                            let popup_id = Id::new(format!("menu-{}", child.path.display()));
-                            if resp.secondary_clicked() {
-                                ui.memory_mut(|m: &mut Memory| m.toggle_popup(popup_id));
-                            }
-                            egui::popup::popup_above_or_below_widget(
-                                ui,
-                                popup_id,
-                                &resp,
-                                egui::AboveOrBelow::Below,
-                                PopupCloseBehavior::CloseOnClickOutside,
-                                |ui| {
-                                    ui.set_min_width(150.0);
-                                    ui.set_max_width(150.0);
-                                    if ui.button("パスのコピー").clicked() {
-                                        ui.output_mut(|o| o.copied_text = child.path.display().to_string());
-                                        ui.memory_mut(|m: &mut Memory| m.close_popup());
-                                    }
-                                    if ui.button("Finderで表示").clicked() {
-                                        if child.path.is_file() {
-                                            let _ = Command::new("open")
-                                                .arg("-R")
-                                                .arg(&child.path)
-                                                .spawn();
-                                        } else {
-                                            let _ = open::that(&child.path);
+                    let height = ui.available_height();
+                    
+                    TableBuilder::new(ui)
+                        .striped(true)
+                        .max_scroll_height(height)
+                        .column(Column::remainder().resizable(true))
+                        .column(Column::exact(80.0))
+                        .column(Column::remainder().resizable(false))
+                        .header(20.0, |mut header| {
+                            header.col(|ui| { ui.label("Name"); });
+                            header.col(|ui| { ui.label("Size (MB)"); });
+                            header.col(|ui| { ui.label("Usage"); });
+                        })
+                        .body(|mut body| {
+                            for child in &node.children {
+                                let pct = child.size as f64 / node.size as f64 * 100.0;
+                                let size_mb = child.size as f64 / 1_048_576.0;
+                                body.row(20.0, |mut row| {
+                                    // Name cell
+                                    row.col(|ui| {
+                                        let resp = ui.selectable_label(false, &*child.name);
+                                        // ディレクトリの場合、クリックで開く
+                                        if resp.clicked() && !child.children.is_empty() {
+                                            self.bread.push(&**child as *const DirNode);
                                         }
-                                    }
-                                },
-                            );
-                            // Usage cell
-                            ui.add_sized([bar_w, 20.0], egui::ProgressBar::new(pct as f32 / 100.0)
-                                .desired_width(bar_w)
-                                .text(format!("{:.1}%", pct))
-                            );
-                        }); // end horizontal
-                    }
+                                        // 右クリックでコンテキストメニュー
+                                        let popup_id = Id::new(format!("menu-{}", child.path.display()));
+                                        if resp.secondary_clicked() {
+                                            ui.memory_mut(|m: &mut Memory| m.toggle_popup(popup_id));
+                                        }
+                                        egui::popup::popup_above_or_below_widget(
+                                            ui,
+                                            popup_id,
+                                            &resp,
+                                            egui::AboveOrBelow::Below,
+                                            PopupCloseBehavior::CloseOnClickOutside,
+                                            |ui| {
+                                                ui.set_min_width(150.0);
+                                                ui.set_max_width(150.0);
+                                                if ui.button("パスのコピー").clicked() {
+                                                    ui.output_mut(|o| o.copied_text = child.path.display().to_string());
+                                                    ui.memory_mut(|m: &mut Memory| m.close_popup());
+                                                }
+                                                if ui.button("Finderで表示").clicked() {
+                                                    if child.path.is_file() {
+                                                        let _ = Command::new("open")
+                                                            .arg("-R")
+                                                            .arg(&child.path)
+                                                            .spawn();
+                                                    } else {
+                                                        let _ = open::that(&child.path);
+                                                    }
+                                                }
+                                            },
+                                        );
+                                        
+                                    });
+                                    // Size cell
+                                    row.col(|ui| {
+                                        ui.label(format!("{:.2}", size_mb));
+                                    });
+                                    // Usage cell
+                                    row.col(|ui| {
+                                        ui.add(
+                                            egui::ProgressBar::new(pct as f32 / 100.0)
+                                                .text(format!("{:.1}%", pct))
+                                        );
+                                    });
+                                });
+                            }
+                        });
                 });
             } else {
                 ui.label("No data…");
