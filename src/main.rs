@@ -14,7 +14,7 @@
 
 use std::{
     collections::HashMap,
-    path::{PathBuf, Path},
+    path::{PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -67,23 +67,27 @@ enum ScanMsg {
 fn spawn_scan(root_path: PathBuf) -> Receiver<ScanMsg> {
     let (s, r) = unbounded();
     std::thread::spawn(move || {
+        // WalkDir でエントリ収集
         let entries: Vec<_> = WalkDir::new(&root_path)
             .into_iter()
             .par_bridge()
             .filter_map(Result::ok)
             .collect();
+        // ディレクトリ数とファイル合計バイト数計算
         let total_dirs = entries.iter().filter(|e| e.file_type().is_dir()).count() as u64;
         let total_bytes: u64 = entries.par_iter()
             .filter(|e| e.file_type().is_file())
             .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
             .sum();
 
+        // ルートノード作成
         let mut root = Box::new(DirNode::new(
             Arc::from(root_path.file_name().unwrap_or_default().to_string_lossy().as_ref()),
             root_path.clone(),
             total_bytes,
         ));
 
+        // 親パスごとにファイルを集約
         let mut map: HashMap<PathBuf, Vec<(Arc<str>, u64)>> = HashMap::new();
         for entry in entries.into_iter().filter(|e| e.file_type().is_file()) {
             if let Ok(m) = entry.metadata() {
@@ -92,24 +96,32 @@ fn spawn_scan(root_path: PathBuf) -> Receiver<ScanMsg> {
                 map.entry(parent).or_default().push((name, m.len()));
             }
         }
+
+        // map を元にルートの children を構築
         for (dir_path, list) in map.into_iter() {
-            // ルート自身を除外
             if dir_path == root_path {
-                continue;
+                // ルート直下のファイルはそのまま root.children に追加
+                for (name, sz) in list {
+                    let child_path = root_path.join(&*name);
+                    root.children.push(Box::new(DirNode::new(name, child_path, sz)));
+                }
+            } else {
+                // サブディレクトリとして扱う
+                let name: Arc<str> = Arc::from(dir_path.file_name().unwrap_or_default().to_string_lossy().as_ref());
+                let mut node = Box::new(DirNode::new(
+                    name.clone(),
+                    dir_path.clone(),
+                    list.iter().map(|(_,sz)| *sz).sum(),
+                ));
+                node.children = list.into_iter().map(|(n, sz)| {
+                    let child_path = dir_path.join(&*n);
+                    Box::new(DirNode::new(n, child_path, sz))
+                }).collect();
+                root.children.push(node);
             }
-            let name: Arc<str> = Arc::from(dir_path.file_name().unwrap_or_default().to_string_lossy().as_ref());
-            let mut node = Box::new(DirNode::new(
-                name.clone(),
-                dir_path.clone(),
-                list.iter().map(|(_,sz)| *sz).sum(),
-            ));
-            node.children = list.into_iter().map(|(n, sz)| {
-                let child_path = dir_path.join(&*n);
-                Box::new(DirNode::new(n, child_path, sz))
-            }).collect();
-            root.children.push(node);
         }
 
+        // メッセージ送信
         s.send(ScanMsg::Progress(ScanProgress { total_dirs, total_bytes, scanned_dirs: total_dirs, scanned_bytes: total_bytes })).ok();
         s.send(ScanMsg::Finished(root)).ok();
     });
