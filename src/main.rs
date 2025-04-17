@@ -107,7 +107,7 @@ fn spawn_scan(root_path: PathBuf) -> Receiver<ScanMsg> {
                     let child_path = root_path.join(&*name);
                     root.children.push(Box::new(DirNode::new(name, child_path, sz)));
                 }
-            } else {
+            } else if dir_path.parent().map(|p| p == &root_path).unwrap_or(false) {
                 // サブディレクトリとして扱う
                 let name: Arc<str> = Arc::from(dir_path.file_name().unwrap_or_default().to_string_lossy().as_ref());
                 let mut node = Box::new(DirNode::new(
@@ -120,7 +120,7 @@ fn spawn_scan(root_path: PathBuf) -> Receiver<ScanMsg> {
                     Box::new(DirNode::new(n, child_path, sz))
                 }).collect();
                 root.children.push(node);
-            }
+            } // else: skip deeper subdirectories
         }
 
         // メッセージ送信
@@ -204,6 +204,7 @@ impl eframe::App for DiskVizApp {
                         });
                     });
                 });
+                
                 // スクロール可能な行
                 ScrollArea::vertical().show(ui, |ui| {
                     let total_width = ui.available_width();
@@ -215,7 +216,7 @@ impl eframe::App for DiskVizApp {
                             // Name cell
                             let resp = ui.add_sized(
                                 [label_w, 20.0],
-                                egui::SelectableLabel::new(false, &*child.name)
+                                egui::Label::new(&*child.name).wrap_mode(TextWrapMode::Truncate)
                             );
                             if resp.clicked() && !child.children.is_empty() {
                                 self.bread.push(&**child as *const DirNode);
@@ -232,6 +233,7 @@ impl eframe::App for DiskVizApp {
                                 PopupCloseBehavior::CloseOnClickOutside,
                                 |ui| {
                                     ui.set_min_width(150.0);
+                                    ui.set_max_width(150.0);
                                     if ui.button("パスのコピー").clicked() {
                                         ui.output_mut(|o| o.copied_text = child.path.display().to_string());
                                         ui.memory_mut(|m: &mut Memory| m.close_popup());
