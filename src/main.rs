@@ -6,7 +6,6 @@ use std::{
 };
 use std::process::Command;
 
-
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::{egui, egui::{Color32, Id, Layout, Align}};
 use eframe::egui::TextWrapMode;
@@ -21,7 +20,7 @@ use rfd::FileDialog;
 use open;
 
 // --------------------------- データモデル ---------------------------
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DirNode {
     name: Arc<str>,
     path: PathBuf,
@@ -39,6 +38,13 @@ impl Default for DirNode {
     fn default() -> Self {
         Self { name: Arc::from(""), path: PathBuf::new(), size: 0, children: Vec::new() }
     }
+}
+
+#[derive(PartialEq)]
+enum SortColumn {
+    Name,
+    Size,
+    Usage,
 }
 
 // --------------------------- スキャン結果メッセージ ---------------------------
@@ -127,11 +133,13 @@ struct DiskVizApp {
     bread: Vec<*const DirNode>,
     root_path: Option<PathBuf>,
     volume_total: Option<u64>,
+    sort_column: Option<SortColumn>,
+    sort_ascending: bool,
 }
 
 impl Default for DiskVizApp {
     fn default() -> Self {
-        Self { tree: None, rx: None, progress: None, bread: Vec::new(), root_path: None, volume_total: None }
+        Self { tree: None, rx: None, progress: None, bread: Vec::new(), root_path: None, volume_total: None, sort_column: None, sort_ascending: true }
     }
 }
 
@@ -185,6 +193,24 @@ impl eframe::App for DiskVizApp {
                     self.bread.pop();
                 }
                 ui.heading(format!("{} ({} items)", node.name, node.children.len()));
+                
+                let mut entries = node.children.clone();
+                if let Some(col) = &self.sort_column {
+                    entries.sort_by(|a, b| {
+                        let denom = self.volume_total.unwrap_or(node.size);
+                        let key_a = match col {
+                            SortColumn::Name  => a.name.to_string().to_lowercase().cmp(&b.name.to_string().to_lowercase()),
+                            SortColumn::Size  => a.size.cmp(&b.size),
+                            SortColumn::Usage => {
+                                let ua = a.size * 100_000 / denom;
+                                let ub = b.size * 100_000 / denom;
+                                ua.cmp(&ub)
+                            }
+                        };
+                        if self.sort_ascending { key_a } else { key_a.reverse() }
+                    });
+                }
+
                 // Table display: Name, Size (MB), Usage
                 ScrollArea::vertical().max_width(ui.available_width()).show(ui, |ui| {
                     let height = ui.available_height();
@@ -196,12 +222,39 @@ impl eframe::App for DiskVizApp {
                         .column(Column::exact(80.0))
                         .column(Column::exact(80.0))
                         .header(20.0, |mut header| {
-                            header.col(|ui| { ui.label("Name"); });
-                            header.col(|ui| { ui.label("Size (MB)"); });
-                            header.col(|ui| { ui.label("Usage"); });
+                            header.col(|ui| {
+                                if ui.button("Name").clicked() {
+                                    if self.sort_column == Some(SortColumn::Name) {
+                                        self.sort_ascending = !self.sort_ascending;
+                                    } else {
+                                        self.sort_column = Some(SortColumn::Name);
+                                        self.sort_ascending = true;
+                                    }
+                                }
+                            });
+                            header.col(|ui| {
+                                if ui.button("Size (MB)").clicked() {
+                                    if self.sort_column == Some(SortColumn::Size) {
+                                        self.sort_ascending = !self.sort_ascending;
+                                    } else {
+                                        self.sort_column = Some(SortColumn::Size);
+                                        self.sort_ascending = true;
+                                    }
+                                }
+                            });
+                            header.col(|ui| {
+                                if ui.button("Usage").clicked() {
+                                    if self.sort_column == Some(SortColumn::Usage) {
+                                        self.sort_ascending = !self.sort_ascending;
+                                    } else {
+                                        self.sort_column = Some(SortColumn::Usage);
+                                        self.sort_ascending = true;
+                                    }
+                                }
+                            });
                         })
                         .body(|mut body| {
-                            for child in &node.children {
+                            for child in &entries {
                                 let denom = self.volume_total.unwrap_or(node.size);
                                 let pct = child.size as f64 / denom as f64 * 100.0;
                                 let size_mb = child.size as f64 / 1_048_576.0;
