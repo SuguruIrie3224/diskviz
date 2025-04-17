@@ -6,9 +6,11 @@ use std::{
 };
 use std::process::Command;
 
+
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::{egui, egui::{Color32, Id, Layout, Align}};
 use eframe::egui::TextWrapMode;
+use eframe::egui::WidgetType::Window;
 use egui::{ScrollArea, Memory, FontDefinitions, FontFamily, FontData};
 use egui_extras::{TableBuilder, Column};
 use egui::popup::PopupCloseBehavior;
@@ -123,11 +125,13 @@ struct DiskVizApp {
     rx: Option<Receiver<ScanMsg>>,
     progress: Option<ScanProgress>,
     bread: Vec<*const DirNode>,
+    root_path: Option<PathBuf>,
+    volume_total: Option<u64>,
 }
 
 impl Default for DiskVizApp {
     fn default() -> Self {
-        Self { tree: None, rx: None, progress: None, bread: Vec::new() }
+        Self { tree: None, rx: None, progress: None, bread: Vec::new(), root_path: None, volume_total: None }
     }
 }
 
@@ -136,6 +140,13 @@ impl eframe::App for DiskVizApp {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             if ui.button("ディレクトリ選択してスキャン").clicked() {
                 if let Some(path) = FileDialog::new().pick_folder() {
+                    // Compute volume total size
+                    if let Ok(stats) = fs2::total_space(&path) {
+                        self.volume_total = Some(stats);
+                    } else {
+                        self.volume_total = None;
+                    }
+                    self.root_path = Some(path.clone());
                     self.rx = Some(spawn_scan(path));
                     self.progress = None;
                     self.tree = None;
@@ -175,15 +186,15 @@ impl eframe::App for DiskVizApp {
                 }
                 ui.heading(format!("{} ({} items)", node.name, node.children.len()));
                 // Table display: Name, Size (MB), Usage
-                ScrollArea::vertical().show(ui, |ui| {
+                ScrollArea::vertical().max_width(ui.available_width()).show(ui, |ui| {
                     let height = ui.available_height();
-                    
+
                     TableBuilder::new(ui)
                         .striped(true)
                         .max_scroll_height(height)
                         .column(Column::remainder().resizable(true))
                         .column(Column::exact(80.0))
-                        .column(Column::remainder().resizable(false))
+                        .column(Column::exact(80.0))
                         .header(20.0, |mut header| {
                             header.col(|ui| { ui.label("Name"); });
                             header.col(|ui| { ui.label("Size (MB)"); });
@@ -191,7 +202,8 @@ impl eframe::App for DiskVizApp {
                         })
                         .body(|mut body| {
                             for child in &node.children {
-                                let pct = child.size as f64 / node.size as f64 * 100.0;
+                                let denom = self.volume_total.unwrap_or(node.size);
+                                let pct = child.size as f64 / denom as f64 * 100.0;
                                 let size_mb = child.size as f64 / 1_048_576.0;
                                 body.row(20.0, |mut row| {
                                     // Name cell
@@ -251,6 +263,7 @@ impl eframe::App for DiskVizApp {
             } else {
                 ui.label("No data…");
             }
+
         });
 
         ctx.request_repaint_after(Duration::from_millis(16));
