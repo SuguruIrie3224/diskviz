@@ -7,9 +7,7 @@ use std::{
 use std::process::Command;
 
 use crossbeam_channel::{unbounded, Receiver};
-use eframe::{egui, egui::{Color32, Id, Layout, Align}};
-use eframe::egui::TextWrapMode;
-use eframe::egui::WidgetType::Window;
+use eframe::{egui, egui::{Id}};
 use egui::{ScrollArea, Memory, FontDefinitions, FontFamily, FontData};
 use egui_extras::{TableBuilder, Column};
 use egui::popup::PopupCloseBehavior;
@@ -344,7 +342,7 @@ fn main() {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let _ = eframe::run_native(
         "DiskViz (single‑file MVP)",
         options,
         Box::new(|cc | {
